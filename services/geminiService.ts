@@ -3,6 +3,11 @@ import { Champion, SocialContent } from "../types";
 import { FUSION_PROMPT } from "../constants";
 import { getCachedImage, uploadImageToS3 } from "./s3Service";
 
+// Helper to get API Key from various sources
+const getApiKey = () => {
+  return process.env.API_KEY || (window as any).USER_PROVIDED_KEY || sessionStorage.getItem('user_api_key');
+};
+
 // Helper to convert blob to base64 (Standard)
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -66,7 +71,7 @@ export const searchChampionImage = async (champion: Champion): Promise<string | 
     return cachedUrl;
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   
   const query = `Find a high resolution official splash art or in-game model render for the character ${champion.name} (Skin: ${champion.skin}) from Teamfight Tactics or League of Legends.`;
   let foundUrl: string | undefined;
@@ -114,7 +119,7 @@ export const generateThumbnail = async (
   imgUrl1: string | null,
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   const parts: any[] = [];
   
@@ -164,7 +169,7 @@ export const generateThumbnail = async (
 };
 
 export const generateViralContent = async (champ1: Champion, champ2: Champion): Promise<SocialContent> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   const prompt = `
     Analyze these two characters: ${champ1.name} (${champ1.skin}) and ${champ2.name} (${champ2.skin}).
@@ -215,7 +220,7 @@ export const generateDuoImage = async (
   imgUrl1: string | null, 
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   const parts: any[] = [];
   
@@ -266,7 +271,7 @@ export const generateFusionImage = async (
   imgUrl1: string | null, 
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   const parts: any[] = [];
   

@@ -27,6 +27,7 @@ export const App: React.FC = () => {
   const [thumbnailImage, setThumbnailImage] = useState<string | null>(null);
   const [socialContent, setSocialContent] = useState<SocialContent | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [userApiKey, setUserApiKey] = useState<string>('');
   const [hasApiKey, setHasApiKey] = useState(false);
   
   // Duplicate Check State
@@ -85,9 +86,20 @@ export const App: React.FC = () => {
       setMongoConfig(JSON.parse(savedMongo));
     }
     
+    // Check for cached User Key
+    const savedKey = sessionStorage.getItem('user_api_key');
+    if (savedKey) {
+      setUserApiKey(savedKey);
+      setHasApiKey(true);
+      (window as any).USER_PROVIDED_KEY = savedKey;
+      process.env.API_KEY = savedKey;
+    }
+
     // Check for API Key via AI Studio
     if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-        window.aistudio.hasSelectedApiKey().then(has => setHasApiKey(has));
+        window.aistudio.hasSelectedApiKey().then(has => {
+            if (has) setHasApiKey(true);
+        });
     }
     
     // Load History
@@ -111,9 +123,9 @@ export const App: React.FC = () => {
     setCurrentUser(null);
     setTftData(null);
     resetResults();
-    if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-        window.aistudio.hasSelectedApiKey().then(has => setHasApiKey(has));
-    }
+    setUserApiKey('');
+    sessionStorage.removeItem('user_api_key');
+    setHasApiKey(false);
   };
 
   const handleGoogleAuth = async () => {
@@ -122,6 +134,16 @@ export const App: React.FC = () => {
       setHasApiKey(true);
       addLog("Authenticated via Google AI Studio.");
     }
+  };
+
+  const handleManualKeySubmit = () => {
+      if (userApiKey.trim().length > 0) {
+          sessionStorage.setItem('user_api_key', userApiKey);
+          (window as any).USER_PROVIDED_KEY = userApiKey;
+          process.env.API_KEY = userApiKey;
+          setHasApiKey(true);
+          addLog("Manual Access Token set.");
+      }
   };
 
   // Settings Handlers
@@ -292,8 +314,14 @@ export const App: React.FC = () => {
 
   const startFusionProcess = async () => {
     if (!champions || !hasApiKey) {
-        if (!hasApiKey) handleGoogleAuth();
+        if (!hasApiKey && !userApiKey) handleGoogleAuth();
         return;
+    }
+
+    // Ensure Global Key is set before calling services
+    if (userApiKey) {
+        (window as any).USER_PROVIDED_KEY = userApiKey;
+        process.env.API_KEY = userApiKey;
     }
 
     setStatus(AppStatus.SEARCHING);
@@ -617,14 +645,25 @@ export const App: React.FC = () => {
                 <Key className="w-6 h-6 text-amber-500" />
                 <div>
                     <h3 className="text-sm font-bold text-amber-200">API Access Required</h3>
-                    <p className="text-xs text-amber-200/60">Please select your Google Cloud Project to proceed.</p>
+                    <p className="text-xs text-amber-200/60">Provide Vertex AI Token or Gemini API Key.</p>
                 </div>
                 </div>
                 
-                <div className="flex gap-2 w-full md:w-auto">
-                <Button onClick={handleGoogleAuth} size="sm" variant="secondary">
-                    Select API Key
-                </Button>
+                <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto items-center">
+                   <div className="relative w-full md:w-64">
+                      <input 
+                        type="password" 
+                        placeholder="gcloud auth print-access-token"
+                        value={userApiKey}
+                        onChange={(e) => setUserApiKey(e.target.value)}
+                        className="w-full bg-slate-900 border border-amber-500/30 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 placeholder:text-slate-600 font-mono"
+                      />
+                   </div>
+                   <Button onClick={handleManualKeySubmit} size="sm" disabled={!userApiKey}>Connect</Button>
+                   <span className="text-xs text-slate-500 px-2">OR</span>
+                   <Button onClick={handleGoogleAuth} size="sm" variant="secondary">
+                     AI Studio
+                   </Button>
                 </div>
             </div>
             )}
