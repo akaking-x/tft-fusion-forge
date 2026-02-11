@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Champion, TFTData, GenerationState, AppStatus, SocialContent, S3Config, MongoConfig, User, FusionProject } from './types';
 import { FUSION_PROMPT } from './constants';
 import { searchChampionImage, generateFusionImage, generateViralContent, generateThumbnail, generateDuoImage } from './services/geminiService';
@@ -11,12 +11,11 @@ import { LoginScreen } from './components/LoginScreen';
 import { UserManagement } from './components/UserManagement';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { ProjectGallery } from './components/ProjectGallery';
-import { FileUp, RefreshCw, Download, Sparkles, Copy, Check, MousePointerClick, Shuffle, Filter, X, Settings, Database, Server, Key, LogOut, Users, Lock, Users as UsersIcon, LayoutGrid, Zap, ClipboardCopy } from 'lucide-react';
+import { FileUp, RefreshCw, Download, Sparkles, Copy, Check, MousePointerClick, Shuffle, Filter, X, Settings, Database, Server, Key, LogOut, Users, Lock, Users as UsersIcon, LayoutGrid, Zap, ClipboardCopy, AlertTriangle, History, Video, Play, Maximize, Target } from 'lucide-react';
 
-const App: React.FC = () => {
+export const App: React.FC = () => {
   // Auth State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [userApiKey, setUserApiKey] = useState<string>('');
   const [showChangePassword, setShowChangePassword] = useState(false);
 
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -30,6 +29,9 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<string[]>([]);
   const [hasApiKey, setHasApiKey] = useState(false);
   
+  // Duplicate Check State
+  const [duplicateWarning, setDuplicateWarning] = useState<{ found: boolean; date?: number }>({ found: false });
+
   // View State
   const [currentView, setCurrentView] = useState<'generator' | 'gallery'>('generator');
   const [projectHistory, setProjectHistory] = useState<FusionProject[]>([]);
@@ -65,6 +67,9 @@ const App: React.FC = () => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [imageCopyStatus, setImageCopyStatus] = useState<string | null>(null);
 
+  // Refs for animation
+  const rollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Initialization
   useEffect(() => {
     // Load configs from local storage
@@ -80,12 +85,9 @@ const App: React.FC = () => {
       setMongoConfig(JSON.parse(savedMongo));
     }
     
-    // Check for cached User Key
-    const savedKey = sessionStorage.getItem('user_api_key');
-    if (savedKey) {
-      setUserApiKey(savedKey);
-      setHasApiKey(true);
-      (window as any).USER_PROVIDED_KEY = savedKey;
+    // Check for API Key via AI Studio
+    if (window.aistudio && window.aistudio.hasSelectedApiKey) {
+        window.aistudio.hasSelectedApiKey().then(has => setHasApiKey(has));
     }
     
     // Load History
@@ -109,22 +111,8 @@ const App: React.FC = () => {
     setCurrentUser(null);
     setTftData(null);
     resetResults();
-    setUserApiKey('');
-    sessionStorage.removeItem('user_api_key');
-    setHasApiKey(false);
-  };
-
-  const handleUserApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const key = e.target.value;
-    setUserApiKey(key);
-    sessionStorage.setItem('user_api_key', key);
-    
-    // If the user provides a key manually, we treat it as "connected"
-    if (key.length > 10) {
-      setHasApiKey(true);
-      (window as any).USER_PROVIDED_KEY = key; 
-    } else {
-      setHasApiKey(false);
+    if (window.aistudio && window.aistudio.hasSelectedApiKey) {
+        window.aistudio.hasSelectedApiKey().then(has => setHasApiKey(has));
     }
   };
 
@@ -211,30 +199,72 @@ const App: React.FC = () => {
 
   const uniqueCosts = useMemo(() => {
     if (!tftData) return [];
-    return Array.from(new Set(tftData.champions.map(c => c.cost))).sort((a,b) => a - b);
+    return Array.from(new Set(tftData.champions.map(c => Number(c.cost)))).sort((a: number, b: number) => a - b);
   }, [tftData]);
+
+  // Check MongoDB history for duplicates
+  const checkDuplicate = (c1: Champion, c2: Champion) => {
+     const currentPair = [c1.name, c2.name].sort().join('-');
+     const match = projectHistory.find(p => {
+        const existingPair = [p.champions[0].name, p.champions[1].name].sort().join('-');
+        return existingPair === currentPair;
+     });
+
+     if (match) {
+        setDuplicateWarning({ found: true, date: match.timestamp });
+        addLog(`Notice: This fusion already exists in database (Created: ${new Date(match.timestamp).toLocaleDateString()})`);
+     } else {
+        setDuplicateWarning({ found: false });
+     }
+  };
 
   const handleRandomize = useCallback(() => {
-    if (!tftData) return;
-    const list = tftData.champions;
-    if (list.length < 2) return;
-
-    let idx1 = Math.floor(Math.random() * list.length);
-    let idx2 = Math.floor(Math.random() * list.length);
-    while (idx1 === idx2) {
-      idx2 = Math.floor(Math.random() * list.length);
-    }
+    if (!tftData || !tftData.champions || tftData.champions.length < 2) return;
     
-    const c1 = list[idx1];
-    const c2 = list[idx2];
-    
-    setChampions([c1, c2]);
-    setManualSelection({ c1: c1.name, c2: c2.name });
+    // Start Rolling Visuals
+    setStatus(AppStatus.ROLLING);
     resetResults();
     setCurrentView('generator');
-    addLog(`Randomly Selected: ${c1.name} & ${c2.name}`);
-    setStatus(AppStatus.SELECTED);
-  }, [tftData]);
+    setDuplicateWarning({ found: false });
+    
+    const list = tftData.champions;
+    let rollCount = 0;
+    const maxRolls = 30; // 3 seconds approx at 100ms
+    const intervalMs = 100; // Fast and snappy for video recording
+
+    if (rollingIntervalRef.current) clearInterval(rollingIntervalRef.current);
+
+    rollingIntervalRef.current = setInterval(() => {
+        // Pick random temp champions for visual effect
+        const r1 = list[Math.floor(Math.random() * list.length)];
+        const r2 = list[Math.floor(Math.random() * list.length)];
+        setChampions([r1, r2]);
+
+        rollCount++;
+        
+        if (rollCount >= maxRolls) {
+            // STOP ROLLING and Lock in final result
+            if (rollingIntervalRef.current) clearInterval(rollingIntervalRef.current);
+            
+            // Pick distinct final champions
+            let idx1 = Math.floor(Math.random() * list.length);
+            let idx2 = Math.floor(Math.random() * list.length);
+            while (idx1 === idx2) {
+              idx2 = Math.floor(Math.random() * list.length);
+            }
+            
+            const finalC1 = list[idx1];
+            const finalC2 = list[idx2];
+
+            setChampions([finalC1, finalC2]);
+            checkDuplicate(finalC1, finalC2);
+            setManualSelection({ c1: finalC1.name, c2: finalC2.name });
+            setStatus(AppStatus.SELECTED);
+            addLog(`Randomly Selected: ${finalC1.name} & ${finalC2.name}`);
+        }
+    }, intervalMs);
+
+  }, [tftData, projectHistory]);
 
   const handleManualSelect = () => {
     if (!tftData || !manualSelection.c1 || !manualSelection.c2) return;
@@ -242,6 +272,7 @@ const App: React.FC = () => {
     const c2 = tftData.champions.find(c => c.name === manualSelection.c2);
     if (c1 && c2) {
         setChampions([c1, c2]);
+        checkDuplicate(c1, c2);
         resetResults();
         setCurrentView('generator');
         addLog(`Manually Selected: ${c1.name} & ${c2.name}`);
@@ -256,17 +287,13 @@ const App: React.FC = () => {
     setThumbnailImage(null);
     setSocialContent(null);
     setLogs([]);
+    setDuplicateWarning({ found: false });
   };
 
   const startFusionProcess = async () => {
     if (!champions || !hasApiKey) {
-        if (!hasApiKey && !userApiKey) handleGoogleAuth();
+        if (!hasApiKey) handleGoogleAuth();
         return;
-    }
-
-    // Set the API Key for the session if provided manually
-    if (userApiKey) {
-       process.env.API_KEY = userApiKey;
     }
 
     setStatus(AppStatus.SEARCHING);
@@ -354,9 +381,9 @@ const App: React.FC = () => {
       const errorMsg = error instanceof Error ? error.message : JSON.stringify(error);
       addLog(`Error: ${errorMsg}`);
       
-      if (errorMsg.includes("401") || errorMsg.includes("key")) {
+      if (errorMsg.includes("401") || errorMsg.includes("key") || errorMsg.includes("API Key is missing")) {
         setHasApiKey(false);
-        addLog("Invalid API Key. Please check your credentials.");
+        addLog("Invalid or Missing API Key. Please check your credentials.");
       }
       setStatus(AppStatus.ERROR);
     }
@@ -443,8 +470,11 @@ const App: React.FC = () => {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
+  // Determine if we are rolling
+  const isRolling = status === AppStatus.ROLLING;
+
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-900 text-slate-100 p-4 md:p-8 pb-32 md:pb-8">
       {/* Change Password Modal */}
       {showChangePassword && currentUser && (
         <ChangePasswordModal 
@@ -528,503 +558,608 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <div className="max-w-[1600px] mx-auto space-y-8">
+      {/* Main Container with Sticky Sidebar Logic */}
+      <div className="max-w-[1800px] mx-auto flex flex-col xl:flex-row gap-6">
         
-        {/* Header */}
-        <header className="flex flex-col md:flex-row justify-between items-center border-b border-slate-700 pb-6 gap-4">
-          <div>
-            <h1 className="text-4xl font-bold font-display text-transparent bg-clip-text bg-gradient-to-r from-amber-300 to-orange-500">
-              TFT Fusion Forge
-            </h1>
-            <p className="text-slate-400 mt-2 flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${currentUser.role === 'admin' ? 'bg-amber-500' : 'bg-green-500'}`}></span>
-              Operator: <span className="font-semibold text-slate-200">{currentUser.username}</span> 
-              {currentUser.role === 'admin' && <span className="text-xs bg-amber-900/40 text-amber-500 px-1.5 py-0.5 rounded border border-amber-900/50 ml-1">ADMIN</span>}
-            </p>
-          </div>
-          
-          <div className="flex items-center gap-4">
-             {/* Navigation Tabs */}
-             <div className="bg-slate-800 rounded-lg p-1 flex">
-                <button 
-                  onClick={() => setCurrentView('generator')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${currentView === 'generator' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
-                >
-                  <Zap className="w-4 h-4" /> Generator
-                </button>
-                <button 
-                  onClick={() => { setCurrentView('gallery'); loadHistory(); }}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${currentView === 'gallery' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
-                >
-                  <LayoutGrid className="w-4 h-4" /> Gallery
-                </button>
-             </div>
-
-             <div className="h-6 w-px bg-slate-700 mx-2 hidden md:block"></div>
-
-             <div className="flex items-center gap-2">
-                <button onClick={() => setShowChangePassword(true)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-slate-300 transition-colors" title="Change Password">
-                    <Lock className="w-5 h-5" />
-                </button>
-
-                <button onClick={() => { setShowSettings(true); setActiveTab('s3'); }} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-slate-300 transition-colors" title="Settings">
-                    <Settings className="w-5 h-5" />
-                </button>
-                
-                <button onClick={handleLogout} className="p-2 bg-slate-800 hover:bg-red-900/30 rounded-lg border border-slate-700 hover:border-red-800 text-slate-300 hover:text-red-400 transition-colors" title="Logout">
-                    <LogOut className="w-5 h-5" />
-                </button>
-             </div>
-          </div>
-        </header>
-
-        {/* API Key Input Section (Mandatory if not connected) */}
-        {!hasApiKey && (
-          <div className="bg-amber-900/20 border border-amber-600/30 p-4 rounded-xl flex flex-col md:flex-row items-center gap-4 justify-between animate-in fade-in slide-in-from-top-2">
-            <div className="flex items-center gap-3">
-              <Key className="w-6 h-6 text-amber-500" />
-              <div>
-                <h3 className="text-sm font-bold text-amber-200">API Access Required</h3>
-                <p className="text-xs text-amber-200/60">Provide your own Vertex AI / Gemini API Key to proceed.</p>
-              </div>
+        {/* === LEFT COLUMN: Controls, Header, Results === */}
+        <div className="flex-1 space-y-6 min-w-0">
+            {/* Header */}
+            <header className="flex flex-col md:flex-row justify-between items-center border-b border-slate-700 pb-4 gap-4">
+            <div>
+                <h1 className="text-3xl md:text-4xl font-bold font-display text-transparent bg-clip-text bg-gradient-to-r from-amber-300 to-orange-500">
+                TFT Fusion Forge
+                </h1>
+                <p className="text-slate-400 mt-2 flex items-center gap-2 text-sm md:text-base">
+                <span className={`w-2 h-2 rounded-full ${currentUser.role === 'admin' ? 'bg-amber-500' : 'bg-green-500'}`}></span>
+                Operator: <span className="font-semibold text-slate-200">{currentUser.username}</span> 
+                {currentUser.role === 'admin' && <span className="text-xs bg-amber-900/40 text-amber-500 px-1.5 py-0.5 rounded border border-amber-900/50 ml-1">ADMIN</span>}
+                </p>
             </div>
             
-            <div className="flex gap-2 w-full md:w-auto">
-               <input 
-                 type="password" 
-                 placeholder="Paste API Key here..."
-                 value={userApiKey}
-                 onChange={handleUserApiKeyChange}
-                 className="bg-slate-900 border border-amber-500/30 rounded px-3 py-2 text-sm text-white w-full md:w-64 focus:outline-none focus:border-amber-500"
-               />
-               <span className="text-xs text-slate-500 self-center">OR</span>
-               <Button onClick={handleGoogleAuth} size="sm" variant="secondary">
-                 Use AI Studio
-               </Button>
-            </div>
-          </div>
-        )}
+            <div className="flex items-center gap-2 md:gap-4">
+                <div className="bg-slate-800 rounded-lg p-1 flex">
+                    <button 
+                    onClick={() => setCurrentView('generator')}
+                    className={`flex items-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs md:text-sm font-medium transition-all ${currentView === 'generator' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                    >
+                    <Zap className="w-3 h-3 md:w-4 md:h-4" /> Generator
+                    </button>
+                    <button 
+                    onClick={() => { setCurrentView('gallery'); loadHistory(); }}
+                    className={`flex items-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs md:text-sm font-medium transition-all ${currentView === 'gallery' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                    >
+                    <LayoutGrid className="w-3 h-3 md:w-4 md:h-4" /> Gallery
+                    </button>
+                </div>
 
-        {/* Main Content Router */}
-        {currentView === 'gallery' ? (
-           <ProjectGallery projects={projectHistory} onDelete={handleDeleteProject} />
-        ) : (
-          <main className={`grid grid-cols-1 lg:grid-cols-12 gap-8 ${!hasApiKey ? 'opacity-50 pointer-events-none filter blur-sm transition-all' : ''}`}>
-            
-            {/* Left Panel: Controls & Source */}
-            <section className="lg:col-span-3 space-y-6">
-              
-              {/* 1. Data Source */}
-              <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700 shadow-xl backdrop-blur-sm">
-                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <span className="bg-slate-700 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
-                  Data Source
-                </h2>
-                
-                {!tftData ? (
-                  <>
-                    {mongoConfig.enabled ? (
-                      <div className="text-center space-y-4 py-4">
-                        <div className="mx-auto w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
-                          <Server className="w-6 h-6 text-green-400" />
-                        </div>
-                        <p className="text-sm text-slate-300">Database Connection Active</p>
-                        <Button onClick={fetchDatabaseData} fullWidth variant="primary" icon={<Database className="w-4 h-4"/>}>
-                          Sync from {mongoConfig.dbName}
-                        </Button>
-                        <div className="relative">
-                          <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-700"></span></div>
-                          <div className="relative flex justify-center text-xs uppercase"><span className="bg-slate-800/80 px-2 text-slate-500">Or fallback to local</span></div>
-                        </div>
-                        <label className="block text-center text-xs text-slate-400 hover:text-white cursor-pointer transition-colors">
-                          <input type="file" className="hidden" accept=".json" onChange={handleFileUpload} />
-                          Upload JSON File manually
-                        </label>
-                      </div>
-                    ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer hover:bg-slate-700/50 transition-colors">
-                        <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                          <FileUp className="w-8 h-8 mb-3 text-slate-400" />
-                          <p className="text-sm text-slate-400">Upload <span className="font-semibold">application.json</span></p>
-                        </div>
-                        <input type="file" className="hidden" accept=".json" onChange={handleFileUpload} />
-                      </label>
-                    )}
-                  </>
-                ) : (
-                   <div className="flex items-center justify-between bg-slate-700/50 p-3 rounded-lg border border-slate-600">
-                      <div className="flex items-center gap-2">
-                        {mongoConfig.enabled ? <Database className="w-3 h-3 text-green-400"/> : <FileUp className="w-3 h-3 text-amber-400"/>}
-                        <span className="text-sm truncate">{tftData.set}</span>
-                      </div>
-                      <button onClick={() => setTftData(null)} className="text-xs text-red-400 hover:text-red-300">Change</button>
-                   </div>
-                )}
-              </div>
+                <div className="h-6 w-px bg-slate-700 mx-2 hidden md:block"></div>
 
-              {/* 2. Selection */}
-              {tftData && (
-                <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700 shadow-xl backdrop-blur-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-semibold flex items-center gap-2">
-                      <span className="bg-slate-700 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
-                      Selection
-                    </h2>
+                <div className="flex items-center gap-2">
+                    <button onClick={() => setShowChangePassword(true)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-slate-300 transition-colors" title="Change Password">
+                        <Lock className="w-4 h-4 md:w-5 md:h-5" />
+                    </button>
+
+                    <button onClick={() => { setShowSettings(true); setActiveTab('s3'); }} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-slate-300 transition-colors" title="Settings">
+                        <Settings className="w-4 h-4 md:w-5 md:h-5" />
+                    </button>
                     
-                    {/* Mode Toggle */}
-                    <div className="flex bg-slate-900 rounded-lg p-1 text-xs">
-                      <button 
-                        onClick={() => setSelectionMode('random')}
-                        className={`px-3 py-1 rounded-md transition-all ${selectionMode === 'random' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                      >
-                        Random
-                      </button>
-                      <button 
-                        onClick={() => setSelectionMode('manual')}
-                        className={`px-3 py-1 rounded-md transition-all ${selectionMode === 'manual' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                      >
-                        Manual
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    {selectionMode === 'random' ? (
-                       <Button 
-                          onClick={handleRandomize} 
-                          fullWidth 
-                          variant="secondary"
-                          icon={<Shuffle className={`w-4 h-4 ${status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION || status === AppStatus.GENERATING_THUMBNAIL ? 'animate-spin' : ''}`} />}
-                          disabled={status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION || status === AppStatus.GENERATING_THUMBNAIL}
-                        >
-                          Randomize Champions
-                        </Button>
-                    ) : (
-                      <div className="space-y-3">
-                         {/* Filter Section */}
-                         <div className="bg-slate-900/50 p-2 rounded-lg border border-slate-700/50 mb-3 space-y-2">
-                            <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                               <div className="flex items-center gap-1"><Filter className="w-3 h-3" /> Filters</div>
-                               {(filters.origin || filters.trait || filters.cost) && (
-                                 <button 
-                                   onClick={() => setFilters({ origin: '', trait: '', cost: '' })}
-                                   className="flex items-center gap-1 text-red-400 hover:text-red-300"
-                                 >
-                                   <X className="w-3 h-3" /> Clear
-                                 </button>
-                               )}
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                               {/* Origin Filter */}
-                               <select 
-                                 className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 outline-none focus:border-amber-500"
-                                 value={filters.origin}
-                                 onChange={(e) => setFilters(prev => ({...prev, origin: e.target.value}))}
-                               >
-                                 <option value="">Origin</option>
-                                 {tftData.traits.origins.map(o => (
-                                   <option key={o} value={o}>{o}</option>
-                                 ))}
-                               </select>
-                               
-                               {/* Class Filter */}
-                               <select 
-                                 className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 outline-none focus:border-amber-500"
-                                 value={filters.trait}
-                                 onChange={(e) => setFilters(prev => ({...prev, trait: e.target.value}))}
-                               >
-                                 <option value="">Class</option>
-                                 {tftData.traits.classes.map(c => (
-                                   <option key={c} value={c}>{c}</option>
-                                 ))}
-                               </select>
-
-                               {/* Cost Filter */}
-                               <select 
-                                 className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 outline-none focus:border-amber-500"
-                                 value={filters.cost}
-                                 onChange={(e) => setFilters(prev => ({...prev, cost: e.target.value}))}
-                               >
-                                 <option value="">Cost</option>
-                                 {uniqueCosts.map(c => (
-                                   <option key={c} value={c}>{c} Gold</option>
-                                 ))}
-                               </select>
-                            </div>
-                         </div>
-
-                         <div>
-                           <label className="text-xs text-slate-400 block mb-1">Champion 1</label>
-                           <select 
-                             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none disabled:opacity-50"
-                             value={manualSelection.c1}
-                             onChange={(e) => setManualSelection(prev => ({...prev, c1: e.target.value}))}
-                             disabled={status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION}
-                           >
-                             <option value="">Select Champion...</option>
-                             {filteredChampions.map(c => (
-                               <option key={`c1-${c.name}`} value={c.name}>{c.name} ({c.cost}g)</option>
-                             ))}
-                           </select>
-                         </div>
-                         <div>
-                           <label className="text-xs text-slate-400 block mb-1">Champion 2</label>
-                           <select 
-                             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none disabled:opacity-50"
-                             value={manualSelection.c2}
-                             onChange={(e) => setManualSelection(prev => ({...prev, c2: e.target.value}))}
-                             disabled={status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION}
-                           >
-                             <option value="">Select Champion...</option>
-                             {filteredChampions.map(c => (
-                               <option key={`c2-${c.name}`} value={c.name}>{c.name} ({c.cost}g)</option>
-                             ))}
-                           </select>
-                         </div>
-                         <Button 
-                            onClick={handleManualSelect} 
-                            fullWidth 
-                            variant="secondary"
-                            icon={<MousePointerClick className="w-4 h-4" />}
-                            disabled={!manualSelection.c1 || !manualSelection.c2 || status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION}
-                          >
-                            Confirm Selection
-                          </Button>
-                      </div>
-                    )}
-                  </div>
+                    <button onClick={handleLogout} className="p-2 bg-slate-800 hover:bg-red-900/30 rounded-lg border border-slate-700 hover:border-red-800 text-slate-300 hover:text-red-400 transition-colors" title="Logout">
+                        <LogOut className="w-4 h-4 md:w-5 md:h-5" />
+                    </button>
                 </div>
-              )}
+            </div>
+            </header>
 
-              {/* 3. Process Log */}
-              <div className="bg-black/40 p-4 rounded-xl border border-slate-800 h-48 overflow-y-auto font-mono text-xs text-slate-400">
-                 {logs.length === 0 && <span className="opacity-50">System ready. Waiting for input...</span>}
-                 {logs.map((log, i) => (
-                   <div key={i} className="mb-1 border-l-2 border-slate-600 pl-2">
-                     <span className="text-slate-500">[{new Date().toLocaleTimeString()}]</span> {log}
-                   </div>
-                 ))}
-                 {(status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION || status === AppStatus.GENERATING_THUMBNAIL) && (
-                   <div className="animate-pulse text-amber-500 mt-2">Processing...</div>
-                 )}
-              </div>
-
-              {/* Viral Kit */}
-              {socialContent && status === AppStatus.COMPLETED && (
-                <div className="bg-gradient-to-br from-indigo-900/30 to-purple-900/30 p-6 rounded-xl border border-purple-500/30 shadow-xl backdrop-blur-sm animate-in fade-in slide-in-from-bottom-4 duration-700 delay-200">
-                  <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-purple-200">
-                    <Sparkles className="w-5 h-5 text-purple-400" />
-                    Viral Social Media Kit
-                  </h2>
-
-                  <div className="space-y-4">
-                    <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-700/50">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-xs font-bold text-slate-400 uppercase">Visual Hook</span>
-                        <button onClick={() => copyToClipboard(socialContent.actionDescription, 'desc')} className="text-slate-400 hover:text-white transition-colors">
-                           {copiedField === 'desc' ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-                        </button>
-                      </div>
-                      <p className="text-xs text-slate-300 italic">"{socialContent.actionDescription}"</p>
-                    </div>
-
-                    <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-700/50">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-xs font-bold text-slate-400 uppercase">TikTok Caption (US)</span>
-                        <button onClick={() => copyToClipboard(socialContent.tiktokCaption, 'caption')} className="text-slate-400 hover:text-white transition-colors">
-                          {copiedField === 'caption' ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-                        </button>
-                      </div>
-                      <p className="text-xs text-slate-300 whitespace-pre-wrap font-sans">{socialContent.tiktokCaption}</p>
-                    </div>
-
-                     <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-700/50">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-xs font-bold text-slate-400 uppercase">First Comment</span>
-                        <button onClick={() => copyToClipboard(socialContent.firstComment, 'comment')} className="text-slate-400 hover:text-white transition-colors">
-                          {copiedField === 'comment' ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-                        </button>
-                      </div>
-                      <p className="text-xs text-slate-300 font-medium">"{socialContent.firstComment}"</p>
-                    </div>
-                  </div>
+            {/* API Key Input Section */}
+            {!hasApiKey && (
+            <div className="bg-amber-900/20 border border-amber-600/30 p-4 rounded-xl flex flex-col md:flex-row items-center gap-4 justify-between animate-in fade-in slide-in-from-top-2">
+                <div className="flex items-center gap-3">
+                <Key className="w-6 h-6 text-amber-500" />
+                <div>
+                    <h3 className="text-sm font-bold text-amber-200">API Access Required</h3>
+                    <p className="text-xs text-amber-200/60">Please select your Google Cloud Project to proceed.</p>
                 </div>
-              )}
+                </div>
+                
+                <div className="flex gap-2 w-full md:w-auto">
+                <Button onClick={handleGoogleAuth} size="sm" variant="secondary">
+                    Select API Key
+                </Button>
+                </div>
+            </div>
+            )}
 
-            </section>
+            {/* Main Content Router */}
+            {currentView === 'gallery' ? (
+                <ProjectGallery projects={projectHistory} onDelete={handleDeleteProject} />
+            ) : (
+                <main className={`grid grid-cols-1 lg:grid-cols-12 gap-6 ${!hasApiKey ? 'opacity-50 pointer-events-none filter blur-sm transition-all' : ''}`}>
+                    
+                    {/* Controls Panel */}
+                    <section className="lg:col-span-4 space-y-6">
+                        {/* 1. Data Source */}
+                        <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700 shadow-xl backdrop-blur-sm">
+                            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                            <span className="bg-slate-700 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
+                            Data Source
+                            </h2>
+                            
+                            {!tftData ? (
+                            <>
+                                {mongoConfig.enabled ? (
+                                <div className="text-center space-y-4 py-4">
+                                    <div className="mx-auto w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
+                                    <Server className="w-6 h-6 text-green-400" />
+                                    </div>
+                                    <p className="text-sm text-slate-300">Database Connection Active</p>
+                                    <Button onClick={fetchDatabaseData} fullWidth variant="primary" icon={<Database className="w-4 h-4"/>}>
+                                    Sync from {mongoConfig.dbName}
+                                    </Button>
+                                    <div className="relative">
+                                    <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-700"></span></div>
+                                    <div className="relative flex justify-center text-xs uppercase"><span className="bg-slate-800/80 px-2 text-slate-500">Or fallback to local</span></div>
+                                    </div>
+                                    <label className="block text-center text-xs text-slate-400 hover:text-white cursor-pointer transition-colors">
+                                    <input type="file" className="hidden" accept=".json" onChange={handleFileUpload} />
+                                    Upload JSON File manually
+                                    </label>
+                                </div>
+                                ) : (
+                                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer hover:bg-slate-700/50 transition-colors">
+                                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                                    <FileUp className="w-8 h-8 mb-3 text-slate-400" />
+                                    <p className="text-sm text-slate-400">Upload <span className="font-semibold">application.json</span></p>
+                                    </div>
+                                    <input type="file" className="hidden" accept=".json" onChange={handleFileUpload} />
+                                </label>
+                                )}
+                            </>
+                            ) : (
+                            <div className="flex items-center justify-between bg-slate-700/50 p-3 rounded-lg border border-slate-600">
+                                <div className="flex items-center gap-2">
+                                    {mongoConfig.enabled ? <Database className="w-3 h-3 text-green-400"/> : <FileUp className="w-3 h-3 text-amber-400"/>}
+                                    <span className="text-sm truncate">{tftData.set}</span>
+                                </div>
+                                <button onClick={() => setTftData(null)} className="text-xs text-red-400 hover:text-red-300">Change</button>
+                            </div>
+                            )}
+                        </div>
 
-            {/* Right Panel: Display Stage */}
-            <section className="lg:col-span-9 flex flex-col gap-6">
-              
-              {/* Source Champions Display */}
-              <div className="grid grid-cols-2 gap-4">
-                {champions ? (
-                  <>
-                    <ChampionCard 
-                      champion={champions[0]} 
-                      imageUrl={sourceImages[0]} 
-                      loading={status === AppStatus.SEARCHING}
-                    />
-                    <ChampionCard 
-                      champion={champions[1]} 
-                      imageUrl={sourceImages[1]} 
-                      loading={status === AppStatus.SEARCHING}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <div className="h-64 bg-slate-800/30 rounded-xl border-2 border-dashed border-slate-700 flex items-center justify-center text-slate-600">
-                      Slot 1 Empty
+                        {/* 2. Selection */}
+                        {tftData && (
+                            <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700 shadow-xl backdrop-blur-sm">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-lg font-semibold flex items-center gap-2">
+                                <span className="bg-slate-700 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
+                                Selection
+                                </h2>
+                                
+                                <div className="flex bg-slate-900 rounded-lg p-1 text-xs">
+                                <button 
+                                    onClick={() => setSelectionMode('random')}
+                                    className={`px-3 py-1 rounded-md transition-all ${selectionMode === 'random' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                                >
+                                    Random
+                                </button>
+                                <button 
+                                    onClick={() => setSelectionMode('manual')}
+                                    className={`px-3 py-1 rounded-md transition-all ${selectionMode === 'manual' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                                >
+                                    Manual
+                                </button>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                {selectionMode === 'random' ? (
+                                <div className="hidden lg:block"> 
+                                    <Button 
+                                        onClick={handleRandomize} 
+                                        fullWidth 
+                                        variant="secondary"
+                                        icon={<Shuffle className={`w-4 h-4 ${status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION || status === AppStatus.GENERATING_THUMBNAIL || status === AppStatus.ROLLING ? 'animate-spin' : ''}`} />}
+                                        disabled={status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION || status === AppStatus.GENERATING_THUMBNAIL || status === AppStatus.ROLLING}
+                                    >
+                                        {status === AppStatus.ROLLING ? 'Rolling...' : 'Randomize Champions'}
+                                    </Button>
+                                </div>
+                                ) : (
+                                <div className="space-y-3">
+                                    <div className="bg-slate-900/50 p-2 rounded-lg border border-slate-700/50 mb-3 space-y-2">
+                                        <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                                        <div className="flex items-center gap-1"><Filter className="w-3 h-3" /> Filters</div>
+                                        {(filters.origin || filters.trait || filters.cost) && (
+                                            <button 
+                                            onClick={() => setFilters({ origin: '', trait: '', cost: '' })}
+                                            className="flex items-center gap-1 text-red-400 hover:text-red-300"
+                                            >
+                                            <X className="w-3 h-3" /> Clear
+                                            </button>
+                                        )}
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-2">
+                                        <select 
+                                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 outline-none focus:border-amber-500"
+                                            value={filters.origin}
+                                            onChange={(e) => setFilters(prev => ({...prev, origin: e.target.value}))}
+                                        >
+                                            <option value="">Origin</option>
+                                            {tftData.traits.origins.map(o => (
+                                            <option key={o} value={o}>{o}</option>
+                                            ))}
+                                        </select>
+                                        
+                                        <select 
+                                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 outline-none focus:border-amber-500"
+                                            value={filters.trait}
+                                            onChange={(e) => setFilters(prev => ({...prev, trait: e.target.value}))}
+                                        >
+                                            <option value="">Class</option>
+                                            {tftData.traits.classes.map(c => (
+                                            <option key={c} value={c}>{c}</option>
+                                            ))}
+                                        </select>
+
+                                        <select 
+                                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 outline-none focus:border-amber-500"
+                                            value={filters.cost}
+                                            onChange={(e) => setFilters(prev => ({...prev, cost: e.target.value}))}
+                                        >
+                                            <option value="">Cost</option>
+                                            {uniqueCosts.map(c => (
+                                            <option key={c} value={c}>{c} Gold</option>
+                                            ))}
+                                        </select>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Champion 1</label>
+                                    <select 
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none disabled:opacity-50"
+                                        value={manualSelection.c1}
+                                        onChange={(e) => setManualSelection(prev => ({...prev, c1: e.target.value}))}
+                                        disabled={status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION}
+                                    >
+                                        <option value="">Select Champion...</option>
+                                        {filteredChampions.map(c => (
+                                        <option key={`c1-${c.name}`} value={c.name}>{c.name} ({c.cost}g)</option>
+                                        ))}
+                                    </select>
+                                    </div>
+                                    <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Champion 2</label>
+                                    <select 
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none disabled:opacity-50"
+                                        value={manualSelection.c2}
+                                        onChange={(e) => setManualSelection(prev => ({...prev, c2: e.target.value}))}
+                                        disabled={status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION}
+                                    >
+                                        <option value="">Select Champion...</option>
+                                        {filteredChampions.map(c => (
+                                        <option key={`c2-${c.name}`} value={c.name}>{c.name} ({c.cost}g)</option>
+                                        ))}
+                                    </select>
+                                    </div>
+                                    <Button 
+                                        onClick={handleManualSelect} 
+                                        fullWidth 
+                                        variant="secondary"
+                                        icon={<MousePointerClick className="w-4 h-4" />}
+                                        disabled={!manualSelection.c1 || !manualSelection.c2 || status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION}
+                                    >
+                                        Confirm Selection
+                                    </Button>
+                                </div>
+                                )}
+                            </div>
+                            </div>
+                        )}
+
+                        {/* Process Log */}
+                        <div className="bg-black/40 p-4 rounded-xl border border-slate-800 h-48 overflow-y-auto font-mono text-xs text-slate-400">
+                            {logs.length === 0 && <span className="opacity-50">System ready. Waiting for input...</span>}
+                            {logs.map((log, i) => (
+                            <div key={i} className="mb-1 border-l-2 border-slate-600 pl-2">
+                                <span className="text-slate-500">[{new Date().toLocaleTimeString()}]</span> {log}
+                            </div>
+                            ))}
+                            {(status === AppStatus.SEARCHING || status === AppStatus.GENERATING_FUSION || status === AppStatus.GENERATING_THUMBNAIL) && (
+                            <div className="animate-pulse text-amber-500 mt-2">Processing...</div>
+                            )}
+                        </div>
+
+                        {/* Viral Kit */}
+                        {socialContent && status === AppStatus.COMPLETED && (
+                            <div className="bg-gradient-to-br from-indigo-900/30 to-purple-900/30 p-6 rounded-xl border border-purple-500/30 shadow-xl backdrop-blur-sm animate-in fade-in slide-in-from-bottom-4 duration-700 delay-200">
+                            <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-purple-200">
+                                <Sparkles className="w-5 h-5 text-purple-400" />
+                                Viral Social Media Kit
+                            </h2>
+
+                            <div className="space-y-4">
+                                <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-700/50">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs font-bold text-slate-400 uppercase">Visual Hook</span>
+                                    <button onClick={() => copyToClipboard(socialContent.actionDescription, 'desc')} className="text-slate-400 hover:text-white transition-colors">
+                                    {copiedField === 'desc' ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-300 italic">"{socialContent.actionDescription}"</p>
+                                </div>
+
+                                <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-700/50">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs font-bold text-slate-400 uppercase">TikTok Caption (US)</span>
+                                    <button onClick={() => copyToClipboard(socialContent.tiktokCaption, 'caption')} className="text-slate-400 hover:text-white transition-colors">
+                                    {copiedField === 'caption' ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-300 whitespace-pre-wrap font-sans">{socialContent.tiktokCaption}</p>
+                                </div>
+
+                                <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-700/50">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs font-bold text-slate-400 uppercase">First Comment</span>
+                                    <button onClick={() => copyToClipboard(socialContent.firstComment, 'comment')} className="text-slate-400 hover:text-white transition-colors">
+                                    {copiedField === 'comment' ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-300 font-medium">"{socialContent.firstComment}"</p>
+                                </div>
+                            </div>
+                            </div>
+                        )}
+                    </section>
+
+                    {/* Results Display Panel */}
+                    <section className="lg:col-span-8 flex flex-col gap-4 md:gap-6">
+                        
+                        {/* Duplicate Warning Banner */}
+                        {duplicateWarning.found && status === AppStatus.SELECTED && (
+                            <div className="bg-amber-900/40 border border-amber-600/50 rounded-lg p-3 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 mx-2 md:mx-0">
+                                <div className="bg-amber-900/50 p-2 rounded-full">
+                                <History className="w-5 h-5 text-amber-500" />
+                                </div>
+                                <div className="flex-1">
+                                <h4 className="text-sm font-bold text-amber-200">Fusion Already Exists</h4>
+                                <p className="text-xs text-amber-200/70">
+                                    These two champions were previously fused on {duplicateWarning.date ? new Date(duplicateWarning.date).toLocaleDateString() : 'Unknown Date'}.
+                                    You can generate again, but it may consume API quota.
+                                </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Action Bar - Desktop */}
+                        {champions && status !== AppStatus.SEARCHING && !status.startsWith('GENERATING') && status !== AppStatus.COMPLETED && status !== AppStatus.ROLLING && (
+                            <div className="hidden lg:flex justify-center py-4">
+                            <Button 
+                                onClick={startFusionProcess} 
+                                size="lg" 
+                                variant="accent"
+                                icon={<Sparkles className="w-5 h-5" />}
+                                disabled={!hasApiKey}
+                            >
+                                {hasApiKey ? "Initiate Fusion Protocol" : "Select API Key to Fuse"}
+                            </Button>
+                            </div>
+                        )}
+
+                        {/* Result Display Grid */}
+                        {(status.startsWith('GENERATING') || status === AppStatus.COMPLETED) && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                            
+                            {/* 1. Duo Image (9:16) */}
+                            <div className="group relative min-h-[500px] bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-2">
+                                {(status.startsWith('GENERATING')) && !duoImage && (
+                                    <div className="text-center space-y-4 z-10">
+                                    <Loader />
+                                    <p className="text-blue-400 font-display animate-pulse text-sm tracking-widest">ASSEMBLING DUO</p>
+                                    </div>
+                                )}
+
+                                {duoImage && (
+                                    <div className="w-full h-full flex flex-col items-center">
+                                        <div className="relative flex-grow flex items-center justify-center bg-black rounded-lg w-full mb-2 overflow-hidden">
+                                        <img 
+                                            src={duoImage} 
+                                            alt="Duo Result" 
+                                            className="max-h-[600px] w-auto h-auto object-contain rounded-lg shadow-2xl border border-blue-500/20" 
+                                        />
+                                        <div className="absolute top-2 left-2 bg-blue-600/80 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase">
+                                            Duo Mode
+                                        </div>
+                                        <ImageActionToolbar 
+                                            url={duoImage} 
+                                            id="duo" 
+                                            filename={`Duo_${champions?.[0].name}_${champions?.[1].name}.png`} 
+                                        />
+                                        </div>
+                                        {socialContent && (
+                                        <div className="w-full bg-slate-900/80 p-3 rounded border border-slate-700 text-xs text-slate-300 italic text-center">
+                                            {socialContent.duoImagePrompt}
+                                        </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 2. Main Fusion (9:16) */}
+                            <div className="group relative min-h-[500px] bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-amber-500/30 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-2">
+                                {(status.startsWith('GENERATING')) && (
+                                    <div className="text-center space-y-4 z-10">
+                                    <Loader />
+                                    <p className="text-amber-400 font-display animate-pulse text-lg tracking-widest">FORGING ENTITY</p>
+                                    <p className="text-xs text-slate-400 max-w-md mx-auto">
+                                        Rendering 2K Fusion Concept...
+                                    </p>
+                                    </div>
+                                )}
+
+                                {fusionImage && (
+                                    <div className="w-full h-full flex flex-col items-center">
+                                        <div className="relative flex-grow flex items-center justify-center bg-black rounded-lg w-full mb-2 overflow-hidden">
+                                        <img 
+                                            src={fusionImage} 
+                                            alt="Fusion Result" 
+                                            className="max-h-[600px] w-auto h-auto object-contain rounded-lg shadow-2xl border border-amber-500/40" 
+                                        />
+                                        <div className="absolute top-2 left-2 bg-amber-600/80 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase">
+                                            Fusion Mode
+                                        </div>
+                                        <ImageActionToolbar 
+                                            url={fusionImage} 
+                                            id="fusion" 
+                                            filename={`Fusion_${champions?.[0].name}_${champions?.[1].name}.png`} 
+                                        />
+                                        </div>
+                                        {socialContent && (
+                                        <div className="w-full bg-slate-900/80 p-3 rounded border border-slate-700 text-xs text-amber-200/80 italic text-center">
+                                            {socialContent.fusionImagePrompt}
+                                        </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 3. Thumbnail (3:4) */}
+                            <div className="group relative min-h-[500px] bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-2">
+                                {(status.startsWith('GENERATING')) && !thumbnailImage && (
+                                    <div className="text-center space-y-4 z-10">
+                                    <p className="text-purple-400 font-display animate-pulse text-sm tracking-widest">DESIGNING THUMBNAIL</p>
+                                    </div>
+                                )}
+
+                                {thumbnailImage && (
+                                    <div className="w-full h-full flex flex-col items-center">
+                                        <div className="relative flex-grow flex items-center justify-center bg-black rounded-lg w-full overflow-hidden">
+                                        <img 
+                                            src={thumbnailImage} 
+                                            alt="Thumbnail Result" 
+                                            className="max-h-[600px] w-auto h-auto object-contain rounded-lg shadow-2xl border border-purple-500/20" 
+                                        />
+                                        <div className="absolute bottom-4 right-4 bg-black/70 text-white px-2 py-1 rounded text-xs font-bold">
+                                            THUMBNAIL PREVIEW
+                                        </div>
+                                        <ImageActionToolbar 
+                                            url={thumbnailImage} 
+                                            id="thumbnail" 
+                                            filename={`Thumbnail_${champions?.[0].name}_${champions?.[1].name}.png`} 
+                                        />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            </div>
+                        )}
+
+                        {/* Download Actions */}
+                        {status === AppStatus.COMPLETED && (
+                            <div className="flex justify-center gap-4 py-4 animate-in fade-in slide-in-from-bottom-4">
+                                <Button onClick={downloadAll} variant="primary" size="lg" icon={<Download className="w-5 h-5" />}>
+                                Download All Assets
+                                </Button>
+                                <Button onClick={selectionMode === 'manual' ? handleManualSelect : handleRandomize} variant="secondary" size="lg" icon={<RefreshCw className="w-5 h-5" />}>
+                                    {selectionMode === 'manual' ? 'Re-Fuse' : 'New Fusion'}
+                                </Button>
+                            </div>
+                        )}
+                    </section>
+                </main>
+            )}
+        </div>
+
+        {/* === RIGHT COLUMN: Studio Recording Frame (Persistent) === */}
+        {/* Hidden on mobile default, visible on xl screens or if user explicitly wants studio mode */}
+        <aside className="w-full xl:w-[450px] flex-shrink-0 flex flex-col items-center">
+             <div className="sticky top-4 w-full">
+                <div className="bg-slate-900 border-4 border-amber-500/30 rounded-xl overflow-hidden shadow-2xl relative">
+                    <div className="aspect-[9/16] w-full relative bg-slate-950 flex flex-col">
+                        
+                        {/* Header Branding */}
+                        <div className="absolute top-6 w-full text-center z-20">
+                            <h2 className="font-display text-2xl font-bold text-amber-500 drop-shadow-md tracking-wider">TFT FUSION FORGE</h2>
+                        </div>
+
+                        {/* Content Area */}
+                        <div className="flex-1 flex flex-col p-4 gap-4 justify-center">
+                            {champions ? (
+                                <>
+                                    {/* Top Card */}
+                                    <div className="flex-1 overflow-hidden rounded-xl border-2 border-slate-700 relative shadow-lg">
+                                        <ChampionCard 
+                                            champion={champions[0]} 
+                                            imageUrl={sourceImages[0]} 
+                                            loading={status === AppStatus.SEARCHING} 
+                                            isRolling={isRolling} 
+                                        />
+                                    </div>
+                                    
+                                    <div className="flex items-center justify-center -my-3 z-10 relative">
+                                        <div className="bg-amber-500 text-black font-bold rounded-full w-12 h-12 flex items-center justify-center border-4 border-slate-900 shadow-xl text-lg">
+                                            VS
+                                        </div>
+                                    </div>
+
+                                    {/* Bottom Card */}
+                                    <div className="flex-1 overflow-hidden rounded-xl border-2 border-slate-700 relative shadow-lg">
+                                        <ChampionCard 
+                                            champion={champions[1]} 
+                                            imageUrl={sourceImages[1]} 
+                                            loading={status === AppStatus.SEARCHING} 
+                                            isRolling={isRolling} 
+                                        />
+                                    </div>
+                                </>
+                            ) : (
+                                // Empty State for Recording Frame
+                                <div className="h-full flex flex-col items-center justify-center gap-4 text-slate-600">
+                                    <Target className="w-16 h-16 opacity-20" />
+                                    <p className="text-sm font-medium uppercase tracking-widest opacity-50">Ready to Roll</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Bottom Status Indicator */}
+                        <div className="absolute bottom-6 w-full text-center z-20 pointer-events-none">
+                            {isRolling ? (
+                                <div className="inline-flex items-center gap-2 bg-black/60 backdrop-blur px-4 py-1.5 rounded-full border border-amber-500/30 animate-pulse">
+                                    <span className="w-2 h-2 bg-amber-500 rounded-full"></span>
+                                    <span className="text-[10px] uppercase font-bold text-amber-100">Rolling...</span>
+                                </div>
+                            ) : (
+                                <div className="inline-flex items-center gap-2 opacity-50">
+                                    <span className="text-[10px] uppercase font-bold text-slate-600 tracking-[0.2em]">Studio Frame</span>
+                                </div>
+                            )}
+                        </div>
                     </div>
-                    <div className="h-64 bg-slate-800/30 rounded-xl border-2 border-dashed border-slate-700 flex items-center justify-center text-slate-600">
-                      Slot 2 Empty
-                    </div>
-                  </>
-                )}
-              </div>
 
-              {/* Action Bar */}
-              {champions && status !== AppStatus.SEARCHING && !status.startsWith('GENERATING') && status !== AppStatus.COMPLETED && (
-                 <div className="flex justify-center py-4">
+                    {/* Recording Helper Text (Outside the 9:16 frame visual, but in container) */}
+                    <div className="absolute top-2 right-2 opacity-0 hover:opacity-100 transition-opacity">
+                        <div className="bg-black/80 text-xs text-white px-2 py-1 rounded">REC Area</div>
+                    </div>
+                </div>
+                
+                <p className="text-center text-xs text-slate-500 mt-3 flex items-center justify-center gap-2">
+                    <Video className="w-3 h-3" /> 
+                    <span>Capture this frame for TikTok/Shorts (9:16)</span>
+                </p>
+             </div>
+        </aside>
+
+      </div>
+
+      {/* Mobile Sticky Bottom Action Bar */}
+      <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 border-t border-slate-800 backdrop-blur-lg lg:hidden z-40 pb-safe">
+         {tftData && selectionMode === 'random' && status !== AppStatus.COMPLETED && !status.startsWith('GENERATING') && (
+            <>
+              {status === AppStatus.SELECTED ? (
+                <div className="flex gap-3">
+                   <Button 
+                      onClick={handleRandomize} 
+                      variant="secondary"
+                      size="lg"
+                      className="flex-1 shadow-lg"
+                      icon={<Shuffle className="w-5 h-5" />}
+                   >
+                     Re-roll
+                   </Button>
                    <Button 
                       onClick={startFusionProcess} 
-                      size="lg" 
+                      fullWidth 
+                      size="lg"
                       variant="accent"
-                      icon={<Sparkles className="w-5 h-5" />}
+                      className="flex-[2] shadow-xl"
+                      icon={<Sparkles className="w-5 h-5"/>}
                       disabled={!hasApiKey}
                    >
-                      {hasApiKey ? "Initiate Fusion Protocol" : "Enter API Key to Fuse"}
+                     Initiate Fusion
                    </Button>
-                 </div>
-              )}
-
-              {/* Result Display Grid */}
-              {(status.startsWith('GENERATING') || status === AppStatus.COMPLETED) && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                   
-                   {/* 1. Duo Image (9:16) */}
-                   <div className="group relative min-h-[500px] bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-2">
-                       {(status.startsWith('GENERATING')) && !duoImage && (
-                         <div className="text-center space-y-4 z-10">
-                           <Loader />
-                           <p className="text-blue-400 font-display animate-pulse text-sm tracking-widest">ASSEMBLING DUO</p>
-                         </div>
-                       )}
-
-                       {duoImage && (
-                         <div className="w-full h-full flex flex-col items-center">
-                            <div className="relative flex-grow flex items-center justify-center bg-black rounded-lg w-full mb-2 overflow-hidden">
-                              <img 
-                                src={duoImage} 
-                                alt="Duo Result" 
-                                className="max-h-[600px] w-auto h-auto object-contain rounded-lg shadow-2xl border border-blue-500/20" 
-                              />
-                              <div className="absolute top-2 left-2 bg-blue-600/80 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase">
-                                  Duo Mode
-                              </div>
-                              <ImageActionToolbar 
-                                url={duoImage} 
-                                id="duo" 
-                                filename={`Duo_${champions?.[0].name}_${champions?.[1].name}.png`} 
-                              />
-                            </div>
-                            {socialContent && (
-                              <div className="w-full bg-slate-900/80 p-3 rounded border border-slate-700 text-xs text-slate-300 italic text-center">
-                                  {socialContent.duoImagePrompt}
-                              </div>
-                            )}
-                         </div>
-                       )}
-                   </div>
-
-                   {/* 2. Main Fusion (9:16) */}
-                   <div className="group relative min-h-[500px] bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-amber-500/30 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-2">
-                       {(status.startsWith('GENERATING')) && (
-                         <div className="text-center space-y-4 z-10">
-                           <Loader />
-                           <p className="text-amber-400 font-display animate-pulse text-lg tracking-widest">FORGING ENTITY</p>
-                           <p className="text-xs text-slate-400 max-w-md mx-auto">
-                              Rendering 2K Fusion Concept...
-                           </p>
-                         </div>
-                       )}
-
-                       {fusionImage && (
-                         <div className="w-full h-full flex flex-col items-center">
-                            <div className="relative flex-grow flex items-center justify-center bg-black rounded-lg w-full mb-2 overflow-hidden">
-                              <img 
-                                src={fusionImage} 
-                                alt="Fusion Result" 
-                                className="max-h-[600px] w-auto h-auto object-contain rounded-lg shadow-2xl border border-amber-500/40" 
-                              />
-                              <div className="absolute top-2 left-2 bg-amber-600/80 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase">
-                                  Fusion Mode
-                              </div>
-                              <ImageActionToolbar 
-                                url={fusionImage} 
-                                id="fusion" 
-                                filename={`Fusion_${champions?.[0].name}_${champions?.[1].name}.png`} 
-                              />
-                            </div>
-                            {socialContent && (
-                               <div className="w-full bg-slate-900/80 p-3 rounded border border-slate-700 text-xs text-amber-200/80 italic text-center">
-                                  {socialContent.fusionImagePrompt}
-                               </div>
-                            )}
-                         </div>
-                       )}
-                   </div>
-
-                   {/* 3. Thumbnail (3:4) */}
-                   <div className="group relative min-h-[500px] bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-2">
-                       {(status.startsWith('GENERATING')) && !thumbnailImage && (
-                         <div className="text-center space-y-4 z-10">
-                           <p className="text-purple-400 font-display animate-pulse text-sm tracking-widest">DESIGNING THUMBNAIL</p>
-                         </div>
-                       )}
-
-                       {thumbnailImage && (
-                         <div className="w-full h-full flex flex-col items-center">
-                            <div className="relative flex-grow flex items-center justify-center bg-black rounded-lg w-full overflow-hidden">
-                              <img 
-                                src={thumbnailImage} 
-                                alt="Thumbnail Result" 
-                                className="max-h-[600px] w-auto h-auto object-contain rounded-lg shadow-2xl border border-purple-500/20" 
-                              />
-                              <div className="absolute bottom-4 right-4 bg-black/70 text-white px-2 py-1 rounded text-xs font-bold">
-                                 THUMBNAIL PREVIEW
-                              </div>
-                              <ImageActionToolbar 
-                                url={thumbnailImage} 
-                                id="thumbnail" 
-                                filename={`Thumbnail_${champions?.[0].name}_${champions?.[1].name}.png`} 
-                              />
-                            </div>
-                         </div>
-                       )}
-                   </div>
-
                 </div>
+              ) : (
+                <Button 
+                    onClick={handleRandomize} 
+                    fullWidth 
+                    size="lg"
+                    variant="secondary"
+                    className="shadow-xl"
+                    icon={<Shuffle className={`w-5 h-5 ${status === AppStatus.ROLLING ? 'animate-spin' : ''}`} />}
+                    disabled={status === AppStatus.ROLLING}
+                >
+                  {status === AppStatus.ROLLING ? 'Rolling...' : 'Randomize Champions'}
+                </Button>
               )}
-
-              {/* Download Actions */}
-              {status === AppStatus.COMPLETED && (
-                  <div className="flex justify-center gap-4 py-4 animate-in fade-in slide-in-from-bottom-4">
-                    <Button onClick={downloadAll} variant="primary" size="lg" icon={<Download className="w-5 h-5" />}>
-                      Download All Assets
-                    </Button>
-                    <Button onClick={selectionMode === 'manual' ? handleManualSelect : handleRandomize} variant="secondary" size="lg" icon={<RefreshCw className="w-5 h-5" />}>
-                        {selectionMode === 'manual' ? 'Re-Fuse' : 'New Fusion'}
-                    </Button>
-                  </div>
-              )}
-
-            </section>
-          </main>
-        )}
+            </>
+         )}
+         {status === AppStatus.COMPLETED && (
+            <Button onClick={handleRandomize} fullWidth variant="primary" size="lg" icon={<RefreshCw className="w-5 h-5"/>}>
+              New Fusion
+            </Button>
+         )}
       </div>
     </div>
   );
 };
-
-export default App;

@@ -73,6 +73,7 @@ export interface User {
 export enum AppStatus {
   IDLE = 'IDLE',
   READY = 'READY',
+  ROLLING = 'ROLLING', // New status for Gacha effect
   SELECTED = 'SELECTED',
   SEARCHING = 'SEARCHING',
   GENERATING_FUSION = 'GENERATING_FUSION',

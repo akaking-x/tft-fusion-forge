@@ -66,12 +66,7 @@ export const searchChampionImage = async (champion: Champion): Promise<string | 
     return cachedUrl;
   }
 
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key is missing. Please connect your Google account.");
-  }
-  
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const query = `Find a high resolution official splash art or in-game model render for the character ${champion.name} (Skin: ${champion.skin}) from Teamfight Tactics or League of Legends.`;
   let foundUrl: string | undefined;
@@ -107,10 +102,8 @@ export const searchChampionImage = async (champion: Champion): Promise<string | 
 
   } catch (error: any) {
     const errorMsg = error.toString();
-    if (errorMsg.includes("401") || errorMsg.includes("UNAUTHENTICATED") || errorMsg.includes("API keys are not supported")) {
-        throw error;
-    }
     console.error(`Search failed for ${champion.name}`, error);
+    throw error;
   }
   return undefined;
 };
@@ -121,9 +114,7 @@ export const generateThumbnail = async (
   imgUrl1: string | null,
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const parts: any[] = [];
   
@@ -173,9 +164,7 @@ export const generateThumbnail = async (
 };
 
 export const generateViralContent = async (champ1: Champion, champ2: Champion): Promise<SocialContent> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const prompt = `
     Analyze these two characters: ${champ1.name} (${champ1.skin}) and ${champ2.name} (${champ2.skin}).
@@ -226,9 +215,7 @@ export const generateDuoImage = async (
   imgUrl1: string | null, 
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const parts: any[] = [];
   
@@ -279,11 +266,7 @@ export const generateFusionImage = async (
   imgUrl1: string | null, 
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key is missing.");
-  }
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const parts: any[] = [];
   
