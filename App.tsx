@@ -543,13 +543,44 @@ export const App: React.FC = () => {
       }
   };
 
+  const handleDownloadText = (content: string, filename: string) => {
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const downloadAll = async () => {
-    if (!champions || !fusionImage) return;
-    if (sourceImages[0]) await handleDownloadImage(sourceImages[0], `${champions[0].name}_source.png`);
-    if (sourceImages[1]) await handleDownloadImage(sourceImages[1], `${champions[1].name}_source.png`);
-    if (duoImage) await handleDownloadImage(duoImage, `Duo_${champions[0].name}_${champions[1].name}.png`);
-    await handleDownloadImage(fusionImage, `Fusion_${champions[0].name}_${champions[1].name}.png`);
-    if (thumbnailImage) await handleDownloadImage(thumbnailImage, `Thumbnail_${champions[0].name}_${champions[1].name}.png`);
+    if (!champions || !fusionImage || !socialContent) return;
+    
+    // Naming Convention: tft_ff_{champion1}_{champion2}_{type}
+    const c1 = champions[0].name.replace(/\s+/g, '_').toLowerCase();
+    const c2 = champions[1].name.replace(/\s+/g, '_').toLowerCase();
+    const prefix = `tft_ff_${c1}_${c2}`;
+
+    // 1. Duo Image
+    if (duoImage) await handleDownloadImage(duoImage, `${prefix}_duo.png`);
+    
+    // 2. Fusion Image
+    await handleDownloadImage(fusionImage, `${prefix}_fusion.png`);
+    
+    // 3. Thumbnail
+    if (thumbnailImage) await handleDownloadImage(thumbnailImage, `${prefix}_thumbnail.png`);
+
+    // 4. Duo Prompt
+    handleDownloadText(socialContent.duoImagePrompt, `${prefix}_duo_prompt.txt`);
+
+    // 5. Fusion Prompt
+    handleDownloadText(socialContent.fusionImagePrompt, `${prefix}_fusion_prompt.txt`);
+
+    // 6. Info TikTok (Hook, Caption, First Comment)
+    const infoContent = `Hook: ${socialContent.actionDescription}\n\nCaption: ${socialContent.tiktokCaption}\n\nFirst Comment: ${socialContent.firstComment}`;
+    handleDownloadText(infoContent, `${prefix}_info_tiktok.txt`);
   };
 
   const handleDeleteProject = async (id: string) => {
@@ -1031,6 +1062,31 @@ export const App: React.FC = () => {
                                 <Sparkles className="w-5 h-5 text-purple-400" />
                                 Viral Social Media Kit
                             </h2>
+
+                             {/* NEW QUICK COPY BLOCK */}
+                             <div className="bg-slate-950/50 p-4 rounded-xl border border-amber-500/40 mb-6 shadow-inner relative">
+                                <div className="flex justify-between items-center mb-3">
+                                    <h3 className="text-xs font-bold text-amber-500 uppercase tracking-widest flex items-center gap-2">
+                                        <Zap className="w-3 h-3" /> Quick Copy Bundle
+                                    </h3>
+                                    <button 
+                                        onClick={() => {
+                                            const text = `Hook: ${socialContent.actionDescription}\nCaption: ${socialContent.tiktokCaption}\n\nFirst Comment: ${socialContent.firstComment}`;
+                                            copyToClipboard(text, 'quick_bundle');
+                                        }}
+                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${copiedField === 'quick_bundle' ? 'bg-green-600 text-white' : 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/20'}`}
+                                    >
+                                        {copiedField === 'quick_bundle' ? <Check className="w-3 h-3"/> : <ClipboardCopy className="w-3 h-3"/>}
+                                        {copiedField === 'quick_bundle' ? 'COPIED!' : 'COPY ALL'}
+                                    </button>
+                                </div>
+                                <div className="font-mono text-xs text-slate-300 whitespace-pre-wrap bg-black/40 p-3 rounded border border-white/5">
+                                    <span className="text-slate-500">Hook:</span> {socialContent.actionDescription}<br/>
+                                    <span className="text-slate-500">Caption:</span> {socialContent.tiktokCaption}<br/>
+                                    <br/>
+                                    <span className="text-slate-500">First Comment:</span> {socialContent.firstComment}
+                                </div>
+                            </div>
 
                             <div className="space-y-4">
                                 <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-700/50">

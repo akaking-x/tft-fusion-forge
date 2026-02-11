@@ -1,1 +1,16 @@
-export const FUSION_PROMPT = `Create a single unified warrior that is a complete fusion of the character from Image 1 and the character from Image 2 into one brand new being. This is NOT a split design or side-by-side merge — both characters are fully blended into one seamless body, one face, one armor set, and one identity. The fused character inherits facial features, hairstyle, body build, armor details, weapons, and color palette from BOTH characters equally, mixed and interwoven throughout the entire design. Combined signature weapon that merges elements from both original weapons into one. Hybrid armor that blends materials, patterns and ornaments from both characters uniformly across the whole body. Single unified color scheme that harmonizes both characters' palettes. One cohesive powerful aura combining both characters' energy. Dynamic battle pose, full body shot, cinematic dramatic lighting, ultra detailed, 8K, concept art style`;
+export const FUSION_PROMPT = `Create a single, seamless FUSED WARRIOR that combines the physical traits, armor, and aesthetic of the character from Image 1 and the character from Image 2.
+
+    VISUAL STYLE & RENDER:
+    - Style: Hyper-realistic 3D Render, Unreal Engine 5 Cinematic, Octane Render.
+    - Quality: 8K resolution, ray tracing, subsurface scattering on skin/scales, metallic shaders on armor.
+    - Lighting: Volumetric lighting, dramatic rim lights, bioluminescence, high contrast "Chiaroscuro" lighting.
+
+    ACTION & CAMERA:
+    - The character is CAUGHT IN A FREEZE-FRAME of a high-power "Signature Ability".
+    - Camera: Dynamic low-angle shot (looking up at the character) or Dutch Angle (tilted) to convey chaos and power.
+    - Lens: Wide angle (24mm) foreground focus with cinematic depth of field.
+    - Atmosphere: Heavy particle effects (sparks, dust motes, floating debris), shockwaves distorting the air.
+
+    AUDIO VISUALIZATION (SFX ONLY):
+    - VISUALIZE LOUDNESS: Cracking ground, sonic boom rings, shattering reality. 
+    - NO musical instruments, notes, or headphones. Pure combat intensity.`;

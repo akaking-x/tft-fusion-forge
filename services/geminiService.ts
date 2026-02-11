@@ -62,10 +62,9 @@ const getGenAI = () => {
     if (vertexConfig && vertexConfig.projectId) {
         // Vertex Mode
         return new GoogleGenAI({
-            vertexai: {
-                project: vertexConfig.projectId,
-                location: vertexConfig.location
-            }
+            vertexai: true,
+            project: vertexConfig.projectId,
+            location: vertexConfig.location
         });
     }
     // AI Studio Mode
@@ -239,18 +238,23 @@ export const generateViralContent = async (champ1: Champion, champ2: Champion): 
   const prompt = `
     Analyze these two characters: ${champ1.name} (${champ1.skin}) and ${champ2.name} (${champ2.skin}).
     
+    Task: Invent a unique "Signature Ability" (Move) that this fusion character uses.
+    
     Generate 5 things in English:
-    1. 'actionDescription': An exciting, dramatic English description of their fusion in battle.
-    2. 'tiktokCaption': A viral TikTok caption. Hook: "What happens if you fuse X and Y?". Body: Short hype. CTA: "Comment below which champions I should fuse next!". Hashtags: #TFT #LeagueOfLegends #AIart.
-    3. 'firstComment': A specific engaging comment for me to post that explicitly asks for requests. Example: "I'm looking for the craziest combos! Drop your request below and I'll cook it next! 👇👨‍🍳"
-    4. 'duoImagePrompt': A vivid, single-sentence English action prompt describing the two original characters standing together. Example: "${champ1.name} and ${champ2.name} standing back-to-back in a defensive stance, weapons drawn, looking ready to face an army." or "${champ1.name} glaring at ${champ2.name} as sparks fly between them."
-    5. 'fusionImagePrompt': A vivid, single-sentence English action prompt describing the character performing a powerful move. 
-       **CRITICAL RULES FOR fusionImagePrompt:**
-       - Describe the character as a single, unique entity.
-       - Do NOT use words like "fusion", "merged", "combined", "hybrid", "mixed", "both", or "half".
-       - Do NOT use the names "${champ1.name}" or "${champ2.name}".
-       - Focus strictly on the visual action, energy, weapons, and pose.
-       - Example: "A warrior clad in crystalline armor strikes the ground, sending shockwaves of blue fire outward."
+    1. 'actionDescription': A detailed description of this specific Signature Ability. Include the Name of the move, the visual action, and explicitly describe the SOUND EFFECTS (SFX) (e.g., 'ear-splitting thunder', 'heavy metallic thud', 'sizzling laser').
+    2. 'tiktokCaption': A viral TikTok caption. The goal is to hype up this specific new ability. Describe how OP/Broken the move is. Hook: "New Secret Tech: [Move Name]?". Body: Hype the SFX and impact. CTA: "Comment what this move sounds like!". Hashtags: #TFT #LeagueOfLegends #AIart #UnrealEngine5.
+    3. 'firstComment': A specific engaging comment asking users to name the move or rate its power level.
+    4. 'duoImagePrompt': A vivid prompt describing the two original characters standing together. 
+       - Style: Hyper-realistic 3D render, Unreal Engine 5.
+       - Atmosphere: Tense, battle-ready, cinematic lighting.
+       - Audio Vis: Static electricity, floating rocks, visual distortion.
+    5. 'fusionImagePrompt': A vivid prompt describing the fused character EXECUCTING the Signature Ability. 
+       - Style: 8K Octane Render, Action Camera.
+       - Focus: Impact frames, particle effects, shockwaves.
+       **CRITICAL RULES:**
+       - Describe a single fused entity.
+       - Focus on the ACTION and CAMERA ANGLE (Low angle, Dutch tilt).
+       - NO names of original champions.
   `;
 
   const schema: Schema = {
@@ -299,12 +303,18 @@ export const generateDuoImage = async (
   if (imageData2) parts.push({ inlineData: { mimeType: 'image/png', data: imageData2 } });
 
   parts.push({
-    text: `Create a cinematic vertical image (9:16 aspect ratio) featuring BOTH characters: ${champ1.name} and ${champ2.name}. 
+    text: `Create a Hyper-Realistic 3D Cinematic vertical image (9:16 aspect ratio) featuring BOTH characters: ${champ1.name} and ${champ2.name}. 
     
-    They should be standing together in a dynamic composition (e.g., back-to-back, facing each other in a standoff, or charging forward together).
-    Maintain their original designs, armor, and weapons accurately based on the provided reference images.
-    Lighting should be dramatic and high quality. 8K concept art style.
-    Do NOT fuse them. This is a team-up or versus shot.`
+    COMPOSITION & CAMERA:
+    - Camera: Low-angle "Hero Shot" looking up at them, or a dynamic wide-angle lens (24mm) capturing them before a battle.
+    - Framing: They are standing side-by-side or back-to-back, occupying the frame with dominance.
+    - Atmosphere: Raw, gritty, 8K highly detailed textures.
+    
+    VISUAL SFX (NO MUSIC):
+    - Visualize the energy between them. Static electricity, rising dust particles, heat haze, or magical aura distortion.
+    - Lighting: Cinematic volumetric lighting (God rays), dark moody background with bright rim lighting on the characters.
+    - Style: Unreal Engine 5 Cinematic Trailer, Octane Render, VFX heavy.
+    - Do NOT fuse them yet.`
   });
 
   try {
