@@ -27,11 +27,6 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
         
         newInit.headers = headers;
 
-        // If resource is a Request object, we might need to clone it to add headers if we were modifying it, 
-        // but since we are calling originalFetch with (url, config), we treat resource as url string if possible
-        // or just pass resource and updated config.
-        // However, if resource is a Request, config options usually override Request options in fetch.
-        
         return originalFetch(input, newInit);
     }
     return originalFetch(input, init);
