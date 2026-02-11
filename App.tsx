@@ -160,6 +160,55 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleConfigUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const json = JSON.parse(e.target?.result as string);
+        let loaded = false;
+
+        // Update S3 Config
+        if (json.s3) {
+           setS3Config(prev => ({
+             ...prev,
+             endpoint: json.s3.endpoint || prev.endpoint,
+             region: json.s3.region || prev.region,
+             accessKeyId: json.s3.accessKey || prev.accessKeyId,
+             secretAccessKey: json.s3.secretKey || prev.secretAccessKey,
+             bucketName: json.s3.bucket || prev.bucketName,
+           }));
+           addLog("S3 Configuration loaded from file.");
+           loaded = true;
+        }
+
+        // Update Mongo Config
+        if (json.mongodb) {
+           setMongoConfig(prev => ({
+             ...prev,
+             connectionString: json.mongodb.connectionString || prev.connectionString,
+             dbName: json.mongodb.database || prev.dbName,
+             enabled: true 
+           }));
+           addLog("MongoDB Configuration loaded from file.");
+           loaded = true;
+        }
+
+        if (loaded) {
+             // We won't auto-close, user can review and save.
+        } else {
+             alert("Invalid configuration file. Missing 's3' or 'mongodb' keys.");
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Failed to parse Configuration JSON.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // Data Handlers
   const fetchDatabaseData = async () => {
     setStatus(AppStatus.IDLE);
@@ -518,6 +567,19 @@ export const App: React.FC = () => {
             <h3 className="text-xl font-display font-bold mb-4 text-white flex items-center gap-2">
               <Settings className="w-5 h-5 text-slate-400" /> Configuration
             </h3>
+
+            {/* Config Upload Section */}
+            <div className="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700 border-dashed flex items-center justify-between">
+                <div>
+                    <h4 className="text-sm font-bold text-slate-300">Import Config</h4>
+                    <p className="text-xs text-slate-500">Upload application.json to auto-fill connections.</p>
+                </div>
+                <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded text-sm border border-slate-600 transition-colors flex items-center gap-2">
+                    <FileUp className="w-4 h-4" />
+                    <span>Select File</span>
+                    <input type="file" className="hidden" accept=".json" onChange={handleConfigUpload} />
+                </label>
+            </div>
 
             {/* Tabs */}
             <div className="flex border-b border-slate-700 mb-4 overflow-x-auto">
