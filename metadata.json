@@ -1,0 +1,5 @@
+{
+  "name": "TFT Fusion Forge",
+  "description": "Upload TFT Set 16 data to randomly select champions, retrieve their visuals, and generate a high-fidelity 2K fusion concept art using Gemini 3 Pro.",
+  "requestFramePermissions": []
+}
