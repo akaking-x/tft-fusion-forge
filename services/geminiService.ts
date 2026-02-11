@@ -3,10 +3,80 @@ import { Champion, SocialContent } from "../types";
 import { FUSION_PROMPT } from "../constants";
 import { getCachedImage, uploadImageToS3 } from "./s3Service";
 
-// Helper to get API Key from various sources
-const getApiKey = () => {
-  return process.env.API_KEY || (window as any).USER_PROVIDED_KEY || sessionStorage.getItem('user_api_key');
+// --- FETCH INTERCEPTOR FOR VERTEX AI OAUTH ---
+// The @google/genai SDK (client-side) expects standard API keys.
+// To support `gcloud auth print-access-token` (OAuth), we must manually inject the `Authorization: Bearer` header
+// when targeting Vertex AI endpoints, as the SDK doesn't natively support raw token passing in browser contexts easily.
+const originalFetch = window.fetch;
+
+const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    let url = input;
+    if (input instanceof Request) {
+        url = input.url;
+    }
+    url = url.toString();
+    
+    // Check if it's a Vertex AI call and we have a token
+    // We check window variables set in App.tsx
+    if (url.includes('aiplatform.googleapis.com') && (window as any).VERTEX_CONFIG && (window as any).USER_PROVIDED_KEY) {
+        const newInit = init || {};
+        
+        // Handle if config is undefined or headers structure
+        const headers = new Headers(newInit.headers || {});
+        headers.set('Authorization', `Bearer ${(window as any).USER_PROVIDED_KEY}`);
+        
+        newInit.headers = headers;
+
+        // If resource is a Request object, we might need to clone it to add headers if we were modifying it, 
+        // but since we are calling originalFetch with (url, config), we treat resource as url string if possible
+        // or just pass resource and updated config.
+        // However, if resource is a Request, config options usually override Request options in fetch.
+        
+        return originalFetch(input, newInit);
+    }
+    return originalFetch(input, init);
 };
+
+// Attempt to overwrite window.fetch safely
+try {
+    // Attempt direct assignment
+    window.fetch = customFetch;
+} catch (e) {
+    // If direct assignment fails (e.g. getter-only), define property
+    try {
+        Object.defineProperty(window, 'fetch', {
+            value: customFetch,
+            writable: true,
+            configurable: true
+        });
+    } catch (e2) {
+        console.error("Failed to intercept window.fetch for Vertex AI Auth", e2);
+    }
+}
+
+// Helper to get API Key (or Token)
+const getApiKey = () => {
+  return (window as any).USER_PROVIDED_KEY || sessionStorage.getItem('user_api_key') || process.env.API_KEY;
+};
+
+// Helper to construct GoogleGenAI instance based on mode (AI Studio vs Vertex)
+const getGenAI = () => {
+    const key = getApiKey();
+    const vertexConfig = (window as any).VERTEX_CONFIG;
+    
+    if (vertexConfig && vertexConfig.projectId) {
+        // Vertex Mode
+        return new GoogleGenAI({
+            vertexai: {
+                project: vertexConfig.projectId,
+                location: vertexConfig.location
+            }
+        });
+    }
+    // AI Studio Mode
+    return new GoogleGenAI({ apiKey: key });
+}
+
 
 // Helper to convert blob to base64 (Standard)
 const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -71,7 +141,7 @@ export const searchChampionImage = async (champion: Champion): Promise<string | 
     return cachedUrl;
   }
 
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const ai = getGenAI();
   
   const query = `Find a high resolution official splash art or in-game model render for the character ${champion.name} (Skin: ${champion.skin}) from Teamfight Tactics or League of Legends.`;
   let foundUrl: string | undefined;
@@ -119,7 +189,7 @@ export const generateThumbnail = async (
   imgUrl1: string | null,
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const ai = getGenAI();
 
   const parts: any[] = [];
   
@@ -169,7 +239,7 @@ export const generateThumbnail = async (
 };
 
 export const generateViralContent = async (champ1: Champion, champ2: Champion): Promise<SocialContent> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const ai = getGenAI();
 
   const prompt = `
     Analyze these two characters: ${champ1.name} (${champ1.skin}) and ${champ2.name} (${champ2.skin}).
@@ -220,7 +290,7 @@ export const generateDuoImage = async (
   imgUrl1: string | null, 
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const ai = getGenAI();
 
   const parts: any[] = [];
   
@@ -271,7 +341,7 @@ export const generateFusionImage = async (
   imgUrl1: string | null, 
   imgUrl2: string | null
 ): Promise<string | null> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const ai = getGenAI();
 
   const parts: any[] = [];
   

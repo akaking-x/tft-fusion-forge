@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Champion, TFTData, GenerationState, AppStatus, SocialContent, S3Config, MongoConfig, User, FusionProject } from './types';
+import { Champion, TFTData, GenerationState, AppStatus, SocialContent, S3Config, MongoConfig, User, FusionProject, VertexConfig } from './types';
 import { FUSION_PROMPT } from './constants';
 import { searchChampionImage, generateFusionImage, generateViralContent, generateThumbnail, generateDuoImage } from './services/geminiService';
 import { initS3, uploadProjectAsset, getS3Config } from './services/s3Service';
@@ -11,7 +11,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { UserManagement } from './components/UserManagement';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { ProjectGallery } from './components/ProjectGallery';
-import { FileUp, RefreshCw, Download, Sparkles, Copy, Check, MousePointerClick, Shuffle, Filter, X, Settings, Database, Server, Key, LogOut, Users, Lock, Users as UsersIcon, LayoutGrid, Zap, ClipboardCopy, AlertTriangle, History, Video, Play, Maximize, Target } from 'lucide-react';
+import { FileUp, RefreshCw, Download, Sparkles, Copy, Check, MousePointerClick, Shuffle, Filter, X, Settings, Database, Server, Key, LogOut, Users, Lock, Users as UsersIcon, LayoutGrid, Zap, ClipboardCopy, AlertTriangle, History, Video, Play, Maximize, Target, Cloud, Globe } from 'lucide-react';
 
 export const App: React.FC = () => {
   // Auth State
@@ -27,7 +27,11 @@ export const App: React.FC = () => {
   const [thumbnailImage, setThumbnailImage] = useState<string | null>(null);
   const [socialContent, setSocialContent] = useState<SocialContent | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  
+  // API Key & Provider State
+  const [authProvider, setAuthProvider] = useState<'aistudio' | 'vertex'>('aistudio');
   const [userApiKey, setUserApiKey] = useState<string>('');
+  const [vertexConfig, setVertexConfig] = useState<VertexConfig>({ projectId: '', location: 'us-central1' });
   const [hasApiKey, setHasApiKey] = useState(false);
   
   // Duplicate Check State
@@ -88,17 +92,29 @@ export const App: React.FC = () => {
     
     // Check for cached User Key
     const savedKey = sessionStorage.getItem('user_api_key');
+    const savedVertex = sessionStorage.getItem('user_vertex_config');
+    
     if (savedKey) {
       setUserApiKey(savedKey);
       setHasApiKey(true);
       (window as any).USER_PROVIDED_KEY = savedKey;
       process.env.API_KEY = savedKey;
+      
+      if (savedVertex) {
+        const vConfig = JSON.parse(savedVertex);
+        setVertexConfig(vConfig);
+        setAuthProvider('vertex');
+        (window as any).VERTEX_CONFIG = vConfig;
+      }
     }
 
-    // Check for API Key via AI Studio
-    if (window.aistudio && window.aistudio.hasSelectedApiKey) {
+    // Check for API Key via AI Studio (Only if not already set manually)
+    if (!savedKey && window.aistudio && window.aistudio.hasSelectedApiKey) {
         window.aistudio.hasSelectedApiKey().then(has => {
-            if (has) setHasApiKey(true);
+            if (has) {
+                setHasApiKey(true);
+                setAuthProvider('aistudio');
+            }
         });
     }
     
@@ -125,13 +141,17 @@ export const App: React.FC = () => {
     resetResults();
     setUserApiKey('');
     sessionStorage.removeItem('user_api_key');
+    sessionStorage.removeItem('user_vertex_config');
     setHasApiKey(false);
+    (window as any).USER_PROVIDED_KEY = undefined;
+    (window as any).VERTEX_CONFIG = undefined;
   };
 
   const handleGoogleAuth = async () => {
     if (window.aistudio && window.aistudio.openSelectKey) {
       await window.aistudio.openSelectKey();
       setHasApiKey(true);
+      setAuthProvider('aistudio');
       addLog("Authenticated via Google AI Studio.");
     }
   };
@@ -141,8 +161,18 @@ export const App: React.FC = () => {
           sessionStorage.setItem('user_api_key', userApiKey);
           (window as any).USER_PROVIDED_KEY = userApiKey;
           process.env.API_KEY = userApiKey;
+          
+          if (authProvider === 'vertex') {
+              sessionStorage.setItem('user_vertex_config', JSON.stringify(vertexConfig));
+              (window as any).VERTEX_CONFIG = vertexConfig;
+              addLog(`Vertex AI Connected: ${vertexConfig.projectId} (${vertexConfig.location})`);
+          } else {
+              sessionStorage.removeItem('user_vertex_config');
+              (window as any).VERTEX_CONFIG = undefined;
+              addLog("AI Studio API Key set.");
+          }
+
           setHasApiKey(true);
-          addLog("Manual Access Token set.");
       }
   };
 
@@ -180,7 +210,7 @@ export const App: React.FC = () => {
              secretAccessKey: json.s3.secretKey || prev.secretAccessKey,
              bucketName: json.s3.bucket || prev.bucketName,
            }));
-           addLog("S3 Configuration loaded from file.");
+           addLog("S3 Configuration loaded.");
            loaded = true;
         }
 
@@ -192,7 +222,7 @@ export const App: React.FC = () => {
              dbName: json.mongodb.database || prev.dbName,
              enabled: true 
            }));
-           addLog("MongoDB Configuration loaded from file.");
+           addLog("MongoDB Configuration loaded.");
            loaded = true;
         }
 
@@ -371,6 +401,9 @@ export const App: React.FC = () => {
     if (userApiKey) {
         (window as any).USER_PROVIDED_KEY = userApiKey;
         process.env.API_KEY = userApiKey;
+        if (authProvider === 'vertex') {
+           (window as any).VERTEX_CONFIG = vertexConfig;
+        }
     }
 
     setStatus(AppStatus.SEARCHING);
@@ -702,30 +735,91 @@ export const App: React.FC = () => {
 
             {/* API Key Input Section */}
             {!hasApiKey && (
-            <div className="bg-amber-900/20 border border-amber-600/30 p-4 rounded-xl flex flex-col md:flex-row items-center gap-4 justify-between animate-in fade-in slide-in-from-top-2">
-                <div className="flex items-center gap-3">
-                <Key className="w-6 h-6 text-amber-500" />
-                <div>
-                    <h3 className="text-sm font-bold text-amber-200">API Access Required</h3>
-                    <p className="text-xs text-amber-200/60">Provide Vertex AI Token or Gemini API Key.</p>
-                </div>
+            <div className="bg-amber-900/20 border border-amber-600/30 p-4 rounded-xl flex flex-col gap-4 animate-in fade-in slide-in-from-top-2">
+                <div className="flex flex-col md:flex-row items-center gap-4 justify-between">
+                    <div className="flex items-center gap-3">
+                    <Key className="w-6 h-6 text-amber-500" />
+                    <div>
+                        <h3 className="text-sm font-bold text-amber-200">API Access Required</h3>
+                        <p className="text-xs text-amber-200/60">Select authentication method.</p>
+                    </div>
+                    </div>
+
+                    <div className="flex bg-slate-900 p-1 rounded-lg">
+                        <button 
+                            onClick={() => setAuthProvider('aistudio')}
+                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${authProvider === 'aistudio' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >
+                            AI Studio
+                        </button>
+                        <button 
+                            onClick={() => setAuthProvider('vertex')}
+                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${authProvider === 'vertex' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >
+                            Vertex AI
+                        </button>
+                    </div>
                 </div>
                 
-                <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto items-center">
-                   <div className="relative w-full md:w-64">
-                      <input 
-                        type="password" 
-                        placeholder="gcloud auth print-access-token"
-                        value={userApiKey}
-                        onChange={(e) => setUserApiKey(e.target.value)}
-                        className="w-full bg-slate-900 border border-amber-500/30 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 placeholder:text-slate-600 font-mono"
-                      />
-                   </div>
-                   <Button onClick={handleManualKeySubmit} size="sm" disabled={!userApiKey}>Connect</Button>
-                   <span className="text-xs text-slate-500 px-2">OR</span>
-                   <Button onClick={handleGoogleAuth} size="sm" variant="secondary">
-                     AI Studio
-                   </Button>
+                <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700/50">
+                    {authProvider === 'aistudio' ? (
+                         <div className="flex flex-col md:flex-row gap-2 items-center">
+                            <div className="relative w-full">
+                               <input 
+                                 type="password" 
+                                 placeholder="Paste Gemini API Key (AI Studio)"
+                                 value={userApiKey}
+                                 onChange={(e) => setUserApiKey(e.target.value)}
+                                 className="w-full bg-slate-800 border border-amber-500/30 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 placeholder:text-slate-500 font-mono"
+                               />
+                            </div>
+                            <Button onClick={handleManualKeySubmit} size="sm" disabled={!userApiKey} icon={<Key className="w-3 h-3"/>}>Connect</Button>
+                            <span className="text-xs text-slate-500 px-2">OR</span>
+                            <Button onClick={handleGoogleAuth} size="sm" variant="secondary">
+                              AI Studio Login
+                            </Button>
+                         </div>
+                    ) : (
+                        <div className="flex flex-col gap-3">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                    <label className="text-xs text-slate-400">Project ID</label>
+                                    <input 
+                                        type="text" 
+                                        placeholder="my-gcp-project-id"
+                                        value={vertexConfig.projectId}
+                                        onChange={(e) => setVertexConfig({...vertexConfig, projectId: e.target.value})}
+                                        className="w-full bg-slate-800 border border-blue-500/30 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-xs text-slate-400">Location (Region)</label>
+                                    <input 
+                                        type="text" 
+                                        placeholder="us-central1"
+                                        value={vertexConfig.location}
+                                        onChange={(e) => setVertexConfig({...vertexConfig, location: e.target.value})}
+                                        className="w-full bg-slate-800 border border-blue-500/30 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-xs text-slate-400">Access Token (gcloud auth print-access-token)</label>
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="password" 
+                                        placeholder="ya29.a0..."
+                                        value={userApiKey}
+                                        onChange={(e) => setUserApiKey(e.target.value)}
+                                        className="w-full bg-slate-800 border border-blue-500/30 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
+                                    />
+                                    <Button onClick={handleManualKeySubmit} size="sm" disabled={!userApiKey || !vertexConfig.projectId} variant="accent" icon={<Cloud className="w-3 h-3"/>}>
+                                        Connect Vertex
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
             )}

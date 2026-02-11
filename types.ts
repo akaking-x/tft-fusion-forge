@@ -62,6 +62,11 @@ export interface MongoConfig {
   enabled: boolean;
 }
 
+export interface VertexConfig {
+  projectId: string;
+  location: string;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -98,5 +103,7 @@ declare global {
 
   interface Window {
     aistudio?: AIStudio;
+    USER_PROVIDED_KEY?: string;
+    VERTEX_CONFIG?: VertexConfig;
   }
 }
